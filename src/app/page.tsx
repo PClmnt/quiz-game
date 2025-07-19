@@ -1,172 +1,301 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Progress } from '@/components/ui/progress';
-import { GameState, Player, Round } from '@/types/quiz';
-import { allRounds } from '@/data/questions';
+import { TriviaApiService } from '@/services/trivia-api';
+import { MultiplayerApiService } from '@/services/multiplayer-api';
+import { TriviaCategory } from '@/types/trivia-api';
+import { QuizSettings } from '@/types/multiplayer';
 
-export default function QuizGame() {
-  const [gameState, setGameState] = useState<GameState>({
-    players: [],
-    rounds: allRounds,
-    currentRound: 0,
-    currentQuestion: 0,
-    gamePhase: 'setup',
-    answers: {}
+export default function HomePage() {
+  const router = useRouter();
+  const [mode, setMode] = useState<'home' | 'create' | 'join'>('home');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [categories, setCategories] = useState<TriviaCategory[]>([]);
+  const [categoriesLoading, setCategoriesLoading] = useState(true);
+
+  // Create game state
+  const [playerName, setPlayerName] = useState('');
+  const [settings, setSettings] = useState<QuizSettings>({
+    amount: 10,
+    difficulty: 'medium',
+    includeLogos: true,
+    includeSounds: true,
+    questionTimeLimit: 30
   });
 
-  const [newPlayerName, setNewPlayerName] = useState('');
+  // Join game state
+  const [gameId, setGameId] = useState('');
+  const [joinPlayerName, setJoinPlayerName] = useState('');
 
-  const addPlayer = () => {
-    if (newPlayerName.trim()) {
-      const newPlayer: Player = {
-        id: Date.now().toString(),
-        name: newPlayerName.trim(),
-        score: 0
-      };
-      setGameState(prev => ({
-        ...prev,
-        players: [...prev.players, newPlayer]
-      }));
-      setNewPlayerName('');
+  useEffect(() => {
+    loadCategories();
+  }, []);
+
+  const loadCategories = async () => {
+    try {
+      const response = await TriviaApiService.getCategories();
+      setCategories(response.trivia_categories);
+    } catch (error) {
+      console.error('Failed to load categories:', error);
+    } finally {
+      setCategoriesLoading(false);
     }
   };
 
-  const startGame = () => {
-    if (gameState.players.length > 0) {
-      setGameState(prev => ({
-        ...prev,
-        gamePhase: 'playing'
-      }));
+  const createGame = async () => {
+    if (!playerName.trim()) {
+      setError('Please enter your name');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const response = await MultiplayerApiService.createGame(playerName, settings);
+      localStorage.setItem(`player_${response.gameId}`, response.playerId);
+      router.push(`/game/${response.gameId}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create game');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const selectAnswer = (answerIndex: number) => {
-    const currentQuestion = gameState.rounds[gameState.currentRound]?.questions[gameState.currentQuestion];
-    if (!currentQuestion) return;
+  const joinGame = async () => {
+    if (!gameId.trim() || !joinPlayerName.trim()) {
+      setError('Please enter both game ID and your name');
+      return;
+    }
 
-    setGameState(prev => ({
-      ...prev,
-      answers: {
-        ...prev.answers,
-        [currentQuestion.id]: answerIndex
-      }
-    }));
-  };
+    setLoading(true);
+    setError(null);
 
-  const nextQuestion = () => {
-    const currentRound = gameState.rounds[gameState.currentRound];
-    const currentQuestion = currentRound.questions[gameState.currentQuestion];
-    
-    // Update scores for all players based on their answers
-    const updatedPlayers = gameState.players.map(player => {
-      const playerAnswer = gameState.answers[currentQuestion.id];
-      if (playerAnswer === currentQuestion.correctAnswer) {
-        return { ...player, score: player.score + 10 };
-      }
-      return player;
-    });
-
-    if (gameState.currentQuestion < currentRound.questions.length - 1) {
-      setGameState(prev => ({
-        ...prev,
-        players: updatedPlayers,
-        currentQuestion: prev.currentQuestion + 1,
-        gamePhase: 'results'
-      }));
-    } else if (gameState.currentRound < gameState.rounds.length - 1) {
-      setGameState(prev => ({
-        ...prev,
-        players: updatedPlayers,
-        currentRound: prev.currentRound + 1,
-        currentQuestion: 0,
-        gamePhase: 'results'
-      }));
-    } else {
-      setGameState(prev => ({
-        ...prev,
-        players: updatedPlayers,
-        gamePhase: 'finished'
-      }));
+    try {
+      const response = await MultiplayerApiService.joinGame(gameId, joinPlayerName);
+      localStorage.setItem(`player_${gameId}`, response.playerId);
+      router.push(`/game/${gameId}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to join game');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const continueToNextQuestion = () => {
-    setGameState(prev => ({
-      ...prev,
-      gamePhase: 'playing'
-    }));
-  };
-
-  const resetGame = () => {
-    setGameState({
-      players: [],
-      rounds: allRounds,
-      currentRound: 0,
-      currentQuestion: 0,
-      gamePhase: 'setup',
-      answers: {}
-    });
-  };
-
-  if (gameState.gamePhase === 'setup') {
+  if (mode === 'home') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4 flex items-center justify-center">
-        <Card className="w-full max-w-2xl">
+        <Card className="w-full max-w-md">
           <CardHeader className="text-center">
             <CardTitle className="text-3xl font-bold text-gray-800">Family Quiz Game</CardTitle>
-            <p className="text-gray-600">Add players to start the quiz</p>
+            <p className="text-gray-600">Play trivia with friends and family</p>
           </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={newPlayerName}
-                onChange={(e) => setNewPlayerName(e.target.value)}
-                placeholder="Enter player name"
-                className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                onKeyPress={(e) => e.key === 'Enter' && addPlayer()}
-              />
-              <Button onClick={addPlayer}>Add Player</Button>
-            </div>
+          <CardContent className="space-y-4">
+            <Button 
+              onClick={() => setMode('create')} 
+              className="w-full" 
+              size="lg"
+            >
+              🎮 Create New Game
+            </Button>
             
-            {gameState.players.length > 0 && (
-              <div>
-                <h3 className="text-lg font-semibold mb-3">Players:</h3>
-                <div className="flex flex-wrap gap-2">
-                  {gameState.players.map((player) => (
-                    <Badge key={player.id} variant="secondary" className="text-sm px-3 py-1">
-                      {player.name}
-                    </Badge>
-                  ))}
-                </div>
+            <Button 
+              onClick={() => setMode('join')} 
+              variant="outline"
+              className="w-full" 
+              size="lg"
+            >
+              🔗 Join Existing Game
+            </Button>
+
+            <div className="text-center text-sm text-gray-500 pt-4">
+              <p>✨ Dynamic questions from Open Trivia DB</p>
+              <p>🏆 Multiplayer competition</p>
+              <p>📱 Play on any device</p>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (mode === 'create') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4 flex items-center justify-center">
+        <Card className="w-full max-w-4xl">
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Button 
+                variant="ghost" 
+                onClick={() => {setMode('home'); setError(null);}}
+                className="p-2"
+              >
+                ← Back
+              </Button>
+              <CardTitle className="text-2xl">Create New Quiz Game</CardTitle>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-8">
+            
+            {error && (
+              <div className="bg-red-100 border border-red-300 text-red-700 px-4 py-3 rounded">
+                {error}
               </div>
             )}
 
             <div>
-              <h3 className="text-lg font-semibold mb-3">Game Rounds:</h3>
-              <div className="space-y-2">
-                {gameState.rounds.map((round, index) => (
-                  <div key={round.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
-                    <span className="font-medium">{round.name}</span>
+              <label className="block text-sm font-medium mb-2">Your Name</label>
+              <input
+                type="text"
+                value={playerName}
+                onChange={(e) => setPlayerName(e.target.value)}
+                placeholder="Enter your name"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-6">
+              {/* Quiz Settings */}
+              <div>
+                <h3 className="text-xl font-semibold mb-4">Quiz Settings</h3>
+                <div className="space-y-4">
+                  
+                  {/* Number of Questions */}
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Number of Questions</label>
+                    <select 
+                      value={settings.amount}
+                      onChange={(e) => setSettings({...settings, amount: Number(e.target.value)})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value={5}>5 Questions</option>
+                      <option value={10}>10 Questions</option>
+                      <option value={15}>15 Questions</option>
+                      <option value={20}>20 Questions</option>
+                    </select>
+                  </div>
+
+                  {/* Difficulty */}
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Difficulty</label>
+                    <div className="flex gap-2">
+                      {['easy', 'medium', 'hard'].map((diff) => (
+                        <Button
+                          key={diff}
+                          variant={settings.difficulty === diff ? "default" : "outline"}
+                          onClick={() => setSettings({...settings, difficulty: diff as 'easy' | 'medium' | 'hard'})}
+                          className="flex-1"
+                        >
+                          {diff.charAt(0).toUpperCase() + diff.slice(1)}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Category */}
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Category (Optional)</label>
+                    {categoriesLoading ? (
+                      <div className="px-3 py-2 border border-gray-300 rounded-md bg-gray-50">
+                        Loading categories...
+                      </div>
+                    ) : (
+                      <select 
+                        value={settings.category || ''}
+                        onChange={(e) => setSettings({...settings, category: e.target.value ? Number(e.target.value) : undefined})}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="">Any Category</option>
+                        {categories.map((cat) => (
+                          <option key={cat.id} value={cat.id}>{cat.name}</option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+
+                  {/* Extra Rounds */}
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Extra Rounds</label>
+                    <div className="space-y-2">
+                      <label className="flex items-center">
+                        <input
+                          type="checkbox"
+                          checked={settings.includeLogos}
+                          onChange={(e) => setSettings({...settings, includeLogos: e.target.checked})}
+                          className="mr-2"
+                        />
+                        Include Logo Round (4 questions)
+                      </label>
+                      <label className="flex items-center">
+                        <input
+                          type="checkbox"
+                          checked={settings.includeSounds}
+                          onChange={(e) => setSettings({...settings, includeSounds: e.target.checked})}
+                          className="mr-2"
+                        />
+                        Include Sound Round (3 questions)
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Preview */}
+              <div>
+                <h3 className="text-xl font-semibold mb-4">Game Preview</h3>
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center p-3 bg-blue-50 rounded-lg">
+                    <span className="font-medium">Trivia Questions</span>
                     <Badge variant="outline">
-                      {round.questions.length} questions
+                      {settings.amount} questions
                     </Badge>
                   </div>
-                ))}
+                  
+                  {settings.includeLogos && (
+                    <div className="flex justify-between items-center p-3 bg-green-50 rounded-lg">
+                      <span className="font-medium">Logo Round</span>
+                      <Badge variant="outline">4 questions</Badge>
+                    </div>
+                  )}
+                  
+                  {settings.includeSounds && (
+                    <div className="flex justify-between items-center p-3 bg-purple-50 rounded-lg">
+                      <span className="font-medium">Sound Round</span>
+                      <Badge variant="outline">3 questions</Badge>
+                    </div>
+                  )}
+
+                  <div className="mt-4 p-3 bg-gray-50 rounded-lg">
+                    <div className="text-sm text-gray-600">
+                      <p><strong>Total Questions:</strong> {
+                        settings.amount + 
+                        (settings.includeLogos ? 4 : 0) + 
+                        (settings.includeSounds ? 3 : 0)
+                      }</p>
+                      <p><strong>Difficulty:</strong> {settings.difficulty}</p>
+                      <p><strong>Category:</strong> {
+                        settings.category ? 
+                        categories.find(c => c.id === settings.category)?.name || 'Unknown' :
+                        'Any'
+                      }</p>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
 
             <Button 
-              onClick={startGame} 
+              onClick={createGame} 
               className="w-full" 
               size="lg"
-              disabled={gameState.players.length === 0}
+              disabled={!playerName.trim() || loading}
             >
-              Start Quiz Game
+              {loading ? 'Creating Game...' : 'Create & Start Game'}
             </Button>
           </CardContent>
         </Card>
@@ -174,205 +303,64 @@ export default function QuizGame() {
     );
   }
 
-  if (gameState.gamePhase === 'playing') {
-    const currentRound = gameState.rounds[gameState.currentRound];
-    const currentQuestion = currentRound?.questions[gameState.currentQuestion];
-    const totalQuestions = gameState.rounds.reduce((sum, round) => sum + round.questions.length, 0);
-    const currentQuestionNumber = gameState.rounds.slice(0, gameState.currentRound).reduce((sum, round) => sum + round.questions.length, 0) + gameState.currentQuestion + 1;
-    const progress = (currentQuestionNumber / totalQuestions) * 100;
-
-    if (!currentQuestion) {
-      return <div>Loading...</div>;
-    }
-
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
-        <div className="max-w-4xl mx-auto space-y-6">
-          <Card>
-            <CardHeader>
-              <div className="flex justify-between items-center">
-                <CardTitle className="text-2xl">{currentRound.name}</CardTitle>
-                <Badge variant="outline">
-                  Question {gameState.currentQuestion + 1} of {currentRound.questions.length}
-                </Badge>
-              </div>
-              <Progress value={progress} className="w-full" />
-            </CardHeader>
-          </Card>
-
-          <Card>
-            <CardContent className="p-8">
-              <h2 className="text-2xl font-semibold mb-6 text-center">
-                {currentQuestion.question}
-              </h2>
-              
-              {currentQuestion.type === 'logo' && currentQuestion.mediaUrl && (
-                <div className="flex justify-center mb-6">
-                  <div className="w-48 h-48 bg-gray-50 rounded-lg flex items-center justify-center text-8xl">
-                    {currentQuestion.mediaUrl}
-                  </div>
-                </div>
-              )}
-
-              {currentQuestion.type === 'sound' && currentQuestion.mediaUrl && (
-                <div className="flex justify-center mb-6">
-                  <div className="w-48 h-48 bg-gray-50 rounded-lg flex items-center justify-center text-8xl">
-                    {currentQuestion.mediaUrl}
-                  </div>
-                </div>
-              )}
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {currentQuestion.options.map((option, index) => (
-                  <Button
-                    key={index}
-                    variant={gameState.answers[currentQuestion.id] === index ? "default" : "outline"}
-                    className="p-6 text-lg h-auto"
-                    onClick={() => selectAnswer(index)}
-                  >
-                    {String.fromCharCode(65 + index)}. {option}
-                  </Button>
-                ))}
-              </div>
-
-              <div className="flex justify-center mt-8">
-                <Button 
-                  onClick={nextQuestion}
-                  size="lg"
-                  disabled={gameState.answers[currentQuestion.id] === undefined}
-                >
-                  {gameState.currentQuestion < currentRound.questions.length - 1 ? 'Next Question' :
-                   gameState.currentRound < gameState.rounds.length - 1 ? 'Next Round' : 'Finish Game'}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Players</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex flex-wrap gap-4">
-                {gameState.players.map((player) => (
-                  <div key={player.id} className="flex items-center gap-2 p-3 bg-gray-50 rounded-lg">
-                    <span className="font-medium">{player.name}</span>
-                    <Badge>{player.score} pts</Badge>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    );
-  }
-
-  if (gameState.gamePhase === 'results') {
-    const currentRound = gameState.rounds[gameState.currentRound];
-    const currentQuestion = currentRound?.questions[gameState.currentQuestion - 1] || 
-                          gameState.rounds[gameState.currentRound - 1]?.questions[gameState.rounds[gameState.currentRound - 1].questions.length - 1];
-    
-    if (!currentQuestion) return null;
-
-    const correctAnswer = currentQuestion.options[currentQuestion.correctAnswer];
-    const userAnswer = gameState.answers[currentQuestion.id];
-    const isCorrect = userAnswer === currentQuestion.correctAnswer;
-
+  if (mode === 'join') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4 flex items-center justify-center">
-        <Card className="w-full max-w-2xl">
-          <CardHeader className="text-center">
-            <CardTitle className="text-2xl">Question Result</CardTitle>
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Button 
+                variant="ghost" 
+                onClick={() => {setMode('home'); setError(null);}}
+                className="p-2"
+              >
+                ← Back
+              </Button>
+              <CardTitle className="text-2xl">Join Game</CardTitle>
+            </div>
           </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="text-center">
-              <h3 className="text-lg font-medium mb-2">{currentQuestion.question}</h3>
-              {currentQuestion.mediaUrl && (
-                <div className="flex justify-center mb-4">
-                  <div className="w-24 h-24 bg-gray-50 rounded-lg flex items-center justify-center text-4xl">
-                    {currentQuestion.mediaUrl}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="space-y-4">
-              <div className={`p-4 rounded-lg ${isCorrect ? 'bg-green-100 border-green-300' : 'bg-red-100 border-red-300'} border`}>
-                <div className="text-center">
-                  <div className="text-4xl mb-2">{isCorrect ? '✅' : '❌'}</div>
-                  <div className="font-semibold">
-                    {isCorrect ? 'Correct!' : 'Incorrect'}
-                  </div>
-                  {!isCorrect && (
-                    <div className="text-sm mt-2">
-                      Your answer: {userAnswer !== undefined ? currentQuestion.options[userAnswer] : 'No answer'}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="bg-blue-100 border border-blue-300 p-4 rounded-lg">
-                <div className="text-center">
-                  <div className="font-semibold text-blue-800">Correct Answer:</div>
-                  <div className="text-blue-700">{correctAnswer}</div>
-                </div>
-              </div>
-
-              <div>
-                <h4 className="font-semibold mb-2">Current Scores:</h4>
-                <div className="space-y-2">
-                  {gameState.players
-                    .sort((a, b) => b.score - a.score)
-                    .map((player, index) => (
-                      <div key={player.id} className="flex justify-between items-center p-2 bg-gray-50 rounded">
-                        <span>{index + 1}. {player.name}</span>
-                        <Badge>{player.score} pts</Badge>
-                      </div>
-                    ))}
-                </div>
-              </div>
-            </div>
-
-            <Button onClick={continueToNextQuestion} className="w-full" size="lg">
-              Continue
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
-  if (gameState.gamePhase === 'finished') {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4 flex items-center justify-center">
-        <Card className="w-full max-w-2xl">
-          <CardHeader className="text-center">
-            <CardTitle className="text-3xl font-bold">Quiz Complete!</CardTitle>
-            <p className="text-gray-600">Thanks for playing</p>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div>
-              <h3 className="text-lg font-semibold mb-3">Final Scores:</h3>
-              <div className="space-y-2">
-                {gameState.players
-                  .sort((a, b) => b.score - a.score)
-                  .map((player, index) => (
-                    <div key={player.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
-                      <span className="font-medium">
-                        {index === 0 ? '🏆' : `${index + 1}.`} {player.name}
-                      </span>
-                      <Badge variant={index === 0 ? "default" : "secondary"}>
-                        {player.score} pts
-                      </Badge>
-                    </div>
-                  ))}
-              </div>
-            </div>
+          <CardContent className="space-y-4">
             
-            <Button onClick={resetGame} className="w-full" size="lg">
-              Play Again
+            {error && (
+              <div className="bg-red-100 border border-red-300 text-red-700 px-4 py-3 rounded">
+                {error}
+              </div>
+            )}
+
+            <div>
+              <label className="block text-sm font-medium mb-2">Game ID</label>
+              <input
+                type="text"
+                value={gameId}
+                onChange={(e) => setGameId(e.target.value)}
+                placeholder="Enter game ID"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">Your Name</label>
+              <input
+                type="text"
+                value={joinPlayerName}
+                onChange={(e) => setJoinPlayerName(e.target.value)}
+                placeholder="Enter your name"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            <Button 
+              onClick={joinGame} 
+              className="w-full" 
+              size="lg"
+              disabled={!gameId.trim() || !joinPlayerName.trim() || loading}
+            >
+              {loading ? 'Joining Game...' : 'Join Game'}
             </Button>
+
+            <div className="text-center text-sm text-gray-500">
+              <p>Get the game ID from the host to join their quiz</p>
+            </div>
           </CardContent>
         </Card>
       </div>

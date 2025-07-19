@@ -11,6 +11,8 @@ export interface Question {
   correctAnswer: number;
   type: 'general' | 'logo' | 'sound';
   mediaUrl?: string;
+  difficulty?: 'easy' | 'medium' | 'hard';
+  category?: string;
 }
 
 export interface Round {
