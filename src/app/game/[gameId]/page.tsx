@@ -6,12 +6,15 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { GameRoom, PlayerSession } from '@/types/multiplayer';
+import { GameRoom, PlayerSession, Team } from '@/types/multiplayer';
 import { MultiplayerApiService } from '@/services/multiplayer-api';
+import { TeamSetup } from '@/components/TeamSetup';
+import { TeamScoreboard } from '@/components/TeamScoreboard';
 
 interface GameState {
   gameRoom: GameRoom | null;
   players: PlayerSession[];
+  teams: Team[];
   currentPlayer: PlayerSession | null;
   loading: boolean;
   error: string | null;
@@ -25,6 +28,7 @@ export default function MultiplayerGame() {
   const [gameState, setGameState] = useState<GameState>({
     gameRoom: null,
     players: [],
+    teams: [],
     currentPlayer: null,
     loading: true,
     error: null
@@ -35,13 +39,14 @@ export default function MultiplayerGame() {
 
   const loadGameState = useCallback(async () => {
     try {
-      const response = await MultiplayerApiService.getGameState(gameId);
       const storedPlayerId = localStorage.getItem(`player_${gameId}`);
+      const response = await MultiplayerApiService.getGameState(gameId, storedPlayerId || undefined);
       const currentPlayer = response.players.find((p: PlayerSession) => p.id === storedPlayerId);
 
       setGameState({
         gameRoom: response.gameRoom,
         players: response.players,
+        teams: response.teams || [],
         currentPlayer: currentPlayer || null,
         loading: false,
         error: null
@@ -88,6 +93,7 @@ export default function MultiplayerGame() {
       setGameState({
         gameRoom: response.gameRoom,
         players: [response.playerSession],
+        teams: response.teams || [],
         currentPlayer: response.playerSession,
         loading: false,
         error: null
@@ -243,7 +249,7 @@ export default function MultiplayerGame() {
     );
   }
 
-  const { gameRoom, players, currentPlayer } = gameState;
+  const { gameRoom, players, teams, currentPlayer } = gameState;
   if (!gameRoom) return null;
 
   // Setup phase - waiting for host to start
@@ -266,20 +272,60 @@ export default function MultiplayerGame() {
               </p>
             </div>
 
-            <div>
-              <h3 className="text-lg font-semibold mb-3">Players ({players.length}):</h3>
-              <div className="space-y-2">
-                {players.map((player) => (
-                  <div key={player.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
-                    <span className="font-medium">{player.name}</span>
-                    <div className="flex gap-2">
-                      {player.isHost && <Badge variant="secondary">Host</Badge>}
-                      {player.id === currentPlayer.id && <Badge>You</Badge>}
-                    </div>
+            {gameRoom.gameMode === 'teams' ? (
+              <>
+                <TeamSetup 
+                  gameRoom={gameRoom}
+                  currentPlayer={currentPlayer}
+                  teams={teams}
+                  onTeamUpdate={loadGameState}
+                />
+                
+                <div>
+                  <h3 className="text-lg font-semibold mb-3">All Players ({players.length}):</h3>
+                  <div className="space-y-2">
+                    {players.map((player) => {
+                      const playerTeam = teams.find(team => team.playerIds.includes(player.id));
+                      return (
+                        <div key={player.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                          <div className="flex items-center gap-2">
+                            {playerTeam && (
+                              <div 
+                                className="w-3 h-3 rounded-full" 
+                                style={{ backgroundColor: playerTeam.color }}
+                              />
+                            )}
+                            <span className="font-medium">{player.name}</span>
+                            {playerTeam && (
+                              <span className="text-sm text-gray-500">({playerTeam.name})</span>
+                            )}
+                          </div>
+                          <div className="flex gap-2">
+                            {player.isHost && <Badge variant="secondary">Host</Badge>}
+                            {player.id === currentPlayer.id && <Badge>You</Badge>}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
-                ))}
+                </div>
+              </>
+            ) : (
+              <div>
+                <h3 className="text-lg font-semibold mb-3">Players ({players.length}):</h3>
+                <div className="space-y-2">
+                  {players.map((player) => (
+                    <div key={player.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                      <span className="font-medium">{player.name}</span>
+                      <div className="flex gap-2">
+                        {player.isHost && <Badge variant="secondary">Host</Badge>}
+                        {player.id === currentPlayer.id && <Badge>You</Badge>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
 
             <div>
               <h3 className="text-lg font-semibold mb-3">Game Settings:</h3>
@@ -288,12 +334,20 @@ export default function MultiplayerGame() {
                 <p><strong>Difficulty:</strong> {gameRoom.settings.difficulty || 'Mixed'}</p>
                 <p><strong>Logo Round:</strong> {gameRoom.settings.includeLogos ? 'Yes' : 'No'}</p>
                 <p><strong>Sound Round:</strong> {gameRoom.settings.includeSounds ? 'Yes' : 'No'}</p>
+                <p><strong>Game Mode:</strong> {gameRoom.gameMode === 'teams' ? '👥 Teams' : '👤 Individual'}</p>
               </div>
             </div>
 
             {currentPlayer.isHost && (
-              <Button onClick={startGame} className="w-full" size="lg">
-                Start Game
+              <Button 
+                onClick={startGame} 
+                className="w-full" 
+                size="lg"
+                disabled={gameRoom.gameMode === 'teams' && teams.some(team => team.playerIds.length === 0)}
+              >
+                {gameRoom.gameMode === 'teams' && teams.some(team => team.playerIds.length === 0) 
+                  ? 'All teams need at least one player' 
+                  : 'Start Game'}
               </Button>
             )}
 
@@ -322,6 +376,18 @@ export default function MultiplayerGame() {
 
     const hasAnswered = currentPlayer.answers[currentQuestion.id] !== undefined;
     const selectedAnswer = currentPlayer.answers[currentQuestion.id];
+    
+    // In team mode, check if team already answered
+    let teamAnswered = false;
+    let answeredByTeammate: PlayerSession | null = null;
+    if (gameRoom.gameMode === 'teams' && currentPlayer.teamId) {
+      const team = teams.find(t => t.id === currentPlayer.teamId);
+      if (team) {
+        const teamPlayers = players.filter(p => p.teamId === team.id);
+        answeredByTeammate = teamPlayers.find(p => p.answers[currentQuestion.id] !== undefined) || null;
+        teamAnswered = !!answeredByTeammate;
+      }
+    }
 
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
@@ -365,6 +431,14 @@ export default function MultiplayerGame() {
                 </div>
               )}
               
+              {currentPlayer.isHost && hasAnswered && currentQuestion.correctAnswer !== undefined && (
+                <div className="mb-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
+                  <p className="text-sm text-blue-700 font-medium">
+                    🎯 Host View: The correct answer is highlighted in green
+                  </p>
+                </div>
+              )}
+              
               {currentQuestion.type === 'logo' && currentQuestion.mediaUrl && (
                 <div className="flex justify-center mb-6">
                   <div className="w-48 h-48 bg-gray-50 rounded-lg flex items-center justify-center text-8xl">
@@ -382,23 +456,35 @@ export default function MultiplayerGame() {
               )}
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {currentQuestion.options.map((option, index) => (
-                  <Button
-                    key={index}
-                    variant={selectedAnswer === index ? "default" : "outline"}
-                    className="p-6 text-lg h-auto text-left justify-start"
-                    onClick={() => submitAnswer(index)}
-                    disabled={hasAnswered}
-                  >
-                    <span className="font-bold mr-3">{String.fromCharCode(65 + index)}.</span>
-                    <span className="flex-1">{option}</span>
-                  </Button>
-                ))}
+                {currentQuestion.options.map((option, index) => {
+                  const isCorrectAnswer = currentPlayer.isHost && hasAnswered && currentQuestion.correctAnswer === index;
+                  return (
+                    <Button
+                      key={index}
+                      variant={selectedAnswer === index ? "default" : "outline"}
+                      className={`p-6 text-lg h-auto text-left justify-start ${
+                        isCorrectAnswer ? 'ring-2 ring-green-500 ring-offset-2' : ''
+                      }`}
+                      onClick={() => submitAnswer(index)}
+                      disabled={hasAnswered || teamAnswered}
+                    >
+                      <span className="font-bold mr-3">{String.fromCharCode(65 + index)}.</span>
+                      <span className="flex-1">{option}</span>
+                      {isCorrectAnswer && (
+                        <Badge className="ml-2 bg-green-500">Correct</Badge>
+                      )}
+                    </Button>
+                  );
+                })}
               </div>
 
-              {hasAnswered && (
+              {(hasAnswered || teamAnswered) && (
                 <div className="text-center mt-6">
-                  <Badge variant="secondary">Answer submitted! Waiting for other players...</Badge>
+                  <Badge variant="secondary">
+                    {gameRoom.gameMode === 'teams' && teamAnswered && !hasAnswered
+                      ? `${answeredByTeammate?.name} answered for your team!`
+                      : 'Answer submitted! Waiting for other players...'}
+                  </Badge>
                 </div>
               )}
 
@@ -414,25 +500,33 @@ export default function MultiplayerGame() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Players & Scores</CardTitle>
+              <CardTitle>{gameRoom.gameMode === 'teams' ? 'Team Scores' : 'Player Scores'}</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {players
-                  .sort((a, b) => b.score - a.score)
-                  .map((player, index) => (
-                    <div key={player.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium">{index + 1}.</span>
-                        <span className={player.id === currentPlayer.id ? 'font-bold' : ''}>
-                          {player.name}
-                        </span>
-                        {player.id === currentPlayer.id && <Badge variant="outline">You</Badge>}
+              {gameRoom.gameMode === 'teams' ? (
+                <TeamScoreboard 
+                  teams={teams}
+                  players={players}
+                  currentPlayerId={currentPlayer.id}
+                />
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {players
+                    .sort((a, b) => b.score - a.score)
+                    .map((player, index) => (
+                      <div key={player.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">{index + 1}.</span>
+                          <span className={player.id === currentPlayer.id ? 'font-bold' : ''}>
+                            {player.name}
+                          </span>
+                          {player.id === currentPlayer.id && <Badge variant="outline">You</Badge>}
+                        </div>
+                        <Badge>{player.score} pts</Badge>
                       </div>
-                      <Badge>{player.score} pts</Badge>
-                    </div>
-                  ))}
-              </div>
+                    ))}
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -442,38 +536,53 @@ export default function MultiplayerGame() {
 
   // Finished phase
   if (gameRoom.phase === 'finished') {
-    const winner = players.reduce((prev, current) => (prev.score > current.score) ? prev : current);
+    const winnerTeam = gameRoom.gameMode === 'teams' 
+      ? teams.reduce((prev, current) => (prev.score > current.score) ? prev : current)
+      : null;
+    const winnerPlayer = players.reduce((prev, current) => (prev.score > current.score) ? prev : current);
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4 flex items-center justify-center">
         <Card className="w-full max-w-2xl">
           <CardHeader className="text-center">
             <CardTitle className="text-3xl font-bold">🎉 Quiz Complete! 🎉</CardTitle>
-            <p className="text-gray-600">Congratulations {winner.name}!</p>
+            <p className="text-gray-600">
+              {gameRoom.gameMode === 'teams' 
+                ? `Congratulations Team ${winnerTeam?.name}!` 
+                : `Congratulations ${winnerPlayer.name}!`}
+            </p>
           </CardHeader>
           <CardContent className="space-y-6">
             <div>
               <h3 className="text-lg font-semibold mb-3">Final Scores:</h3>
-              <div className="space-y-2">
-                {players
-                  .sort((a, b) => b.score - a.score)
-                  .map((player, index) => (
-                    <div key={player.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium">
-                          {index === 0 ? '🏆' : `${index + 1}.`}
-                        </span>
-                        <span className={player.id === currentPlayer.id ? 'font-bold' : ''}>
-                          {player.name}
-                        </span>
-                        {player.id === currentPlayer.id && <Badge variant="outline">You</Badge>}
+              {gameRoom.gameMode === 'teams' ? (
+                <TeamScoreboard 
+                  teams={teams}
+                  players={players}
+                  currentPlayerId={currentPlayer.id}
+                />
+              ) : (
+                <div className="space-y-2">
+                  {players
+                    .sort((a, b) => b.score - a.score)
+                    .map((player, index) => (
+                      <div key={player.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">
+                            {index === 0 ? '🏆' : `${index + 1}.`}
+                          </span>
+                          <span className={player.id === currentPlayer.id ? 'font-bold' : ''}>
+                            {player.name}
+                          </span>
+                          {player.id === currentPlayer.id && <Badge variant="outline">You</Badge>}
+                        </div>
+                        <Badge variant={index === 0 ? "default" : "secondary"}>
+                          {player.score} pts
+                        </Badge>
                       </div>
-                      <Badge variant={index === 0 ? "default" : "secondary"}>
-                        {player.score} pts
-                      </Badge>
-                    </div>
-                  ))}
-              </div>
+                    ))}
+                </div>
+              )}
             </div>
             
             <Button onClick={() => router.push('/')} className="w-full" size="lg">

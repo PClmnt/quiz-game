@@ -8,7 +8,7 @@ import { logoQuestions, soundQuestions } from '@/data/questions';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { playerName, settings }: { playerName: string; settings: QuizSettings } = body;
+    const { playerName, settings, gameMode = 'individual' }: { playerName: string; settings: QuizSettings; gameMode?: 'individual' | 'teams' } = body;
 
     if (!playerName?.trim()) {
       return NextResponse.json({ error: 'Player name is required' }, { status: 400 });
@@ -59,6 +59,8 @@ export async function POST(request: NextRequest) {
       currentQuestion: 0,
       phase: 'setup',
       players: [playerId],
+      teams: [],
+      gameMode,
       createdAt: new Date(),
       updatedAt: new Date()
     };

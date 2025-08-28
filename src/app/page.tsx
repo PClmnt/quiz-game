@@ -20,12 +20,15 @@ export default function HomePage() {
 
   // Create game state
   const [playerName, setPlayerName] = useState('');
+  const [gameMode, setGameMode] = useState<'individual' | 'teams'>('individual');
   const [settings, setSettings] = useState<QuizSettings>({
     amount: 10,
     difficulty: 'medium',
     includeLogos: true,
     includeSounds: true,
-    questionTimeLimit: 30
+    questionTimeLimit: 30,
+    maxTeams: 4,
+    maxPlayersPerTeam: 4
   });
 
   // Join game state
@@ -57,7 +60,7 @@ export default function HomePage() {
     setError(null);
 
     try {
-      const response = await MultiplayerApiService.createGame(playerName, settings);
+      const response = await MultiplayerApiService.createGame(playerName, settings, gameMode);
       localStorage.setItem(`player_${response.gameId}`, response.playerId);
       router.push(`/game/${response.gameId}`);
     } catch (err) {
@@ -148,15 +151,37 @@ export default function HomePage() {
               </div>
             )}
 
-            <div>
-              <label className="block text-sm font-medium mb-2">Your Name</label>
-              <input
-                type="text"
-                value={playerName}
-                onChange={(e) => setPlayerName(e.target.value)}
-                placeholder="Enter your name"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
+            <div className="grid md:grid-cols-2 gap-6">
+              <div>
+                <label className="block text-sm font-medium mb-2">Your Name</label>
+                <input
+                  type="text"
+                  value={playerName}
+                  onChange={(e) => setPlayerName(e.target.value)}
+                  placeholder="Enter your name"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">Game Mode</label>
+                <div className="flex gap-2">
+                  <Button
+                    variant={gameMode === 'individual' ? "default" : "outline"}
+                    onClick={() => setGameMode('individual')}
+                    className="flex-1"
+                  >
+                    👤 Individual
+                  </Button>
+                  <Button
+                    variant={gameMode === 'teams' ? "default" : "outline"}
+                    onClick={() => setGameMode('teams')}
+                    className="flex-1"
+                  >
+                    👥 Teams
+                  </Button>
+                </div>
+              </div>
             </div>
 
             <div className="grid md:grid-cols-2 gap-6">
@@ -283,11 +308,50 @@ export default function HomePage() {
                         categories.find(c => c.id === settings.category)?.name || 'Unknown' :
                         'Any'
                       }</p>
+                      <p><strong>Game Mode:</strong> {gameMode === 'teams' ? '👥 Teams' : '👤 Individual'}</p>
                     </div>
                   </div>
                 </div>
               </div>
             </div>
+
+            {/* Team Settings */}
+            {gameMode === 'teams' && (
+              <div className="border-t pt-6">
+                <h3 className="text-xl font-semibold mb-4">Team Settings</h3>
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Maximum Teams</label>
+                    <select 
+                      value={settings.maxTeams}
+                      onChange={(e) => setSettings({...settings, maxTeams: Number(e.target.value)})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value={2}>2 Teams</option>
+                      <option value={3}>3 Teams</option>
+                      <option value={4}>4 Teams</option>
+                      <option value={5}>5 Teams</option>
+                      <option value={6}>6 Teams</option>
+                    </select>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Max Players per Team</label>
+                    <select 
+                      value={settings.maxPlayersPerTeam}
+                      onChange={(e) => setSettings({...settings, maxPlayersPerTeam: Number(e.target.value)})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value={2}>2 Players</option>
+                      <option value={3}>3 Players</option>
+                      <option value={4}>4 Players</option>
+                      <option value={5}>5 Players</option>
+                      <option value={6}>6 Players</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <Button 
               onClick={createGame} 

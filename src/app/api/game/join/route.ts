@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import { kv } from '@/lib/kv';
-import { GameRoom, PlayerSession } from '@/types/multiplayer';
+import { GameRoom, PlayerSession, Team } from '@/types/multiplayer';
 
 export async function POST(request: NextRequest) {
   try {
@@ -73,10 +73,20 @@ export async function POST(request: NextRequest) {
       kv.expire(`player:${playerId}`, 3600)
     ]);
 
+    // In team mode, fetch teams for the response
+    let teams: Team[] = [];
+    if (gameRoom.gameMode === 'teams') {
+      const teamData = await Promise.all(
+        gameRoom.teams.map(teamId => kv.get<Team>(`team:${teamId}`))
+      );
+      teams = teamData.filter(Boolean) as Team[];
+    }
+
     return NextResponse.json({
       playerId,
       gameRoom: updatedGameRoom,
-      playerSession
+      playerSession,
+      teams
     });
 
   } catch (error) {

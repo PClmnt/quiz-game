@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { kv } from '@/lib/kv';
-import { GameRoom, PlayerSession } from '@/types/multiplayer';
+import { GameRoom, PlayerSession, Team } from '@/types/multiplayer';
 
 export async function POST(
   request: NextRequest,
@@ -44,6 +44,7 @@ export async function POST(
     );
 
     const validPlayers = players.filter(Boolean) as PlayerSession[];
+    // Update player scores
     const updatedPlayers = await Promise.all(
       validPlayers.map(async (player) => {
         const playerAnswer = player.answers[currentQuestion.id];
@@ -59,6 +60,29 @@ export async function POST(
         return updatedPlayer;
       })
     );
+
+    // Update team scores in team mode
+    let teams: Team[] = [];
+    if (gameRoom.gameMode === 'teams') {
+      teams = await Promise.all(
+        gameRoom.teams.map(async (teamId) => {
+          const team = await kv.get<Team>(`team:${teamId}`);
+          if (!team) return null;
+
+          // Calculate team score by summing player scores
+          const teamPlayers = updatedPlayers.filter(p => p.teamId === teamId);
+          const teamScore = teamPlayers.reduce((sum, player) => sum + player.score, 0);
+
+          const updatedTeam: Team = {
+            ...team,
+            score: teamScore
+          };
+
+          await kv.set(`team:${teamId}`, updatedTeam);
+          return updatedTeam;
+        })
+      ).then(teams => teams.filter(Boolean) as Team[]);
+    }
 
     // Determine next state
     let updatedGameRoom: GameRoom;
@@ -97,15 +121,28 @@ export async function POST(
       success: true,
       gameRoom: updatedGameRoom,
       players: updatedPlayers,
+      teams,
       questionResult: {
         questionId: currentQuestion.id,
         correctAnswer: currentQuestion.correctAnswer,
         playerResults: validPlayers.map(player => ({
           playerId: player.id,
+          teamId: player.teamId,
           answerIndex: player.answers[currentQuestion.id],
           isCorrect: player.answers[currentQuestion.id] === currentQuestion.correctAnswer,
           points: player.answers[currentQuestion.id] === currentQuestion.correctAnswer ? 10 : 0
-        }))
+        })),
+        teamResults: gameRoom.gameMode === 'teams' ? teams.map(team => {
+          const teamPlayers = validPlayers.filter(p => p.teamId === team.id);
+          const answeredPlayer = teamPlayers.find(p => p.answers[currentQuestion.id] !== undefined);
+          const points = answeredPlayer && answeredPlayer.answers[currentQuestion.id] === currentQuestion.correctAnswer ? 10 : 0;
+          
+          return {
+            teamId: team.id,
+            points,
+            answeredBy: answeredPlayer?.id
+          };
+        }) : undefined
       }
     });
 
