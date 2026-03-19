@@ -22,13 +22,13 @@ export class MultiplayerApiService {
     return response.json();
   }
 
-  static async joinGame(gameId: string, playerName: string) {
+  static async joinGame(gameId: string, playerName: string, accessCode?: string) {
     const response = await fetch("/api/game/join", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ gameId, playerName }),
+      body: JSON.stringify({ gameId, playerName, accessCode }),
     });
 
     if (!response.ok) {

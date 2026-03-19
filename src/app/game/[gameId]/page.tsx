@@ -10,47 +10,102 @@ import { GameRoom, PlayerSession, Team } from '@/types/multiplayer';
 import { MultiplayerApiService } from '@/services/multiplayer-api';
 import { TeamSetup } from '@/components/TeamSetup';
 import { TeamScoreboard } from '@/components/TeamScoreboard';
+import { GameSharePanel } from '@/components/GameSharePanel';
+import { getStoredAccessCode, getStoredPlayerId, savePlayerSession } from '@/lib/player-storage';
 
 interface GameState {
   gameRoom: GameRoom | null;
   players: PlayerSession[];
   teams: Team[];
   currentPlayer: PlayerSession | null;
+  playerAccessCode: string | null;
   loading: boolean;
   error: string | null;
+}
+
+function RecoveryCodePanel({ accessCode }: { accessCode: string | null }) {
+  if (!accessCode) {
+    return null;
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-lg">Recovery Code</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="rounded-lg bg-gray-50 p-4 text-center">
+          <div className="font-mono text-2xl font-bold tracking-[0.25em] text-gray-900">
+            {accessCode}
+          </div>
+          <p className="mt-2 text-sm text-gray-600">
+            Use this code to reclaim your seat on another device.
+          </p>
+        </div>
+      </CardContent>
+    </Card>
+  );
 }
 
 export default function MultiplayerGame() {
   const params = useParams();
   const router = useRouter();
-  const gameId = params.gameId as string;
+  const gameIdentifier = params.gameId as string;
   
   const [gameState, setGameState] = useState<GameState>({
     gameRoom: null,
     players: [],
     teams: [],
     currentPlayer: null,
+    playerAccessCode: null,
     loading: true,
     error: null
   });
 
   const [playerName, setPlayerName] = useState('');
+  const [accessCode, setAccessCode] = useState('');
   const [joining, setJoining] = useState(false);
+  const [joinError, setJoinError] = useState<string | null>(null);
 
   const loadGameState = useCallback(async () => {
     try {
-      const storedPlayerId = localStorage.getItem(`player_${gameId}`);
-      const response = await MultiplayerApiService.getGameState(gameId, storedPlayerId || undefined);
-      const currentPlayer = response.players.find((p: PlayerSession) => p.id === storedPlayerId);
+      const storedPlayerId = getStoredPlayerId(gameIdentifier);
+      let response = await MultiplayerApiService.getGameState(gameIdentifier, storedPlayerId || undefined);
+      let currentPlayer = response.players.find((p: PlayerSession) => p.id === storedPlayerId);
+
+      const resolvedGameId = response.gameRoom?.id;
+      const roomCode = response.gameRoom?.roomCode;
+      const fallbackPlayerId = currentPlayer
+        ? null
+        : getStoredPlayerId(gameIdentifier, resolvedGameId, roomCode);
+
+      if (fallbackPlayerId && fallbackPlayerId !== storedPlayerId) {
+        response = await MultiplayerApiService.getGameState(gameIdentifier, fallbackPlayerId);
+        currentPlayer = response.players.find((p: PlayerSession) => p.id === fallbackPlayerId);
+      }
+
+      if (currentPlayer && response.gameRoom) {
+        savePlayerSession(
+          currentPlayer.id,
+          response.playerAccessCode,
+          gameIdentifier,
+          response.gameRoom.id,
+          response.gameRoom.roomCode
+        );
+      }
 
       setGameState({
         gameRoom: response.gameRoom,
         players: response.players,
         teams: response.teams || [],
         currentPlayer: currentPlayer || null,
+        playerAccessCode:
+          response.playerAccessCode ??
+          getStoredAccessCode(gameIdentifier, response.gameRoom?.id, response.gameRoom?.roomCode),
         loading: false,
         error: null
       });
+      setJoinError(null);
     } catch (error) {
       setGameState(prev => ({
         ...prev,
@@ -58,15 +113,15 @@ export default function MultiplayerGame() {
         error: error instanceof Error ? error.message : 'Failed to load game'
       }));
     }
-  }, [gameId]);
+  }, [gameIdentifier]);
 
   useEffect(() => {
     loadGameState();
-  }, [gameId, loadGameState]);
+  }, [gameIdentifier, loadGameState]);
 
   // Poll for game state updates
   useEffect(() => {
-    if (!gameState.currentPlayer) return;
+    if (!gameState.gameRoom) return;
 
     const interval = setInterval(() => {
       loadGameState();
@@ -74,32 +129,29 @@ export default function MultiplayerGame() {
 
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gameState.currentPlayer?.id, loadGameState]);
+  }, [gameState.gameRoom?.id, loadGameState]);
 
   const joinGame = async () => {
-    if (!playerName.trim()) return;
+    if (!playerName.trim() && !accessCode.trim()) return;
 
     setJoining(true);
+    setJoinError(null);
     try {
-      const response = await MultiplayerApiService.joinGame(gameId, playerName);
-      localStorage.setItem(`player_${gameId}`, response.playerId);
-      
-      setGameState({
-        gameRoom: response.gameRoom,
-        players: [response.playerSession],
-        teams: response.teams || [],
-        currentPlayer: response.playerSession,
-        loading: false,
-        error: null
-      });
-      
-      // Load full game state
-      loadGameState();
+      const response = await MultiplayerApiService.joinGame(
+        gameIdentifier,
+        playerName,
+        accessCode.trim() || undefined
+      );
+      savePlayerSession(
+        response.playerId,
+        response.playerAccessCode,
+        gameIdentifier,
+        response.gameRoom.id,
+        response.roomCode
+      );
+      await loadGameState();
     } catch (error) {
-      setGameState(prev => ({
-        ...prev,
-        error: error instanceof Error ? error.message : 'Failed to join game'
-      }));
+      setJoinError(error instanceof Error ? error.message : 'Failed to join game');
     } finally {
       setJoining(false);
     }
@@ -109,7 +161,7 @@ export default function MultiplayerGame() {
     if (!gameState.currentPlayer || !gameState.gameRoom) return;
 
     try {
-      await MultiplayerApiService.startGame(gameId, gameState.currentPlayer.id);
+      await MultiplayerApiService.startGame(gameIdentifier, gameState.currentPlayer.id);
       loadGameState();
     } catch (error) {
       setGameState(prev => ({
@@ -128,7 +180,7 @@ export default function MultiplayerGame() {
 
     try {
       await MultiplayerApiService.submitAnswer(
-        gameId,
+        gameIdentifier,
         gameState.currentPlayer.id,
         currentQuestion.id,
         answerIndex
@@ -146,7 +198,7 @@ export default function MultiplayerGame() {
     if (!gameState.currentPlayer || !gameState.gameRoom) return;
 
     try {
-      await MultiplayerApiService.nextQuestion(gameId, gameState.currentPlayer.id);
+      await MultiplayerApiService.nextQuestion(gameIdentifier, gameState.currentPlayer.id);
       loadGameState();
     } catch (error) {
       setGameState(prev => ({
@@ -154,12 +206,6 @@ export default function MultiplayerGame() {
         error: error instanceof Error ? error.message : 'Failed to advance game'
       }));
     }
-  };
-
-  const copyGameLink = () => {
-    const url = MultiplayerApiService.generateShareableLink(gameId);
-    navigator.clipboard.writeText(url);
-    // Could add a toast notification here
   };
 
   if (gameState.loading) {
@@ -200,16 +246,42 @@ export default function MultiplayerGame() {
           <CardHeader className="text-center">
             <CardTitle className="text-2xl">Join Quiz Game</CardTitle>
             {gameState.gameRoom && (
-              <p className="text-gray-600">{gameState.gameRoom.name}</p>
+              <div className="space-y-1 text-gray-600">
+                <p>{gameState.gameRoom.name}</p>
+                <p className="text-sm font-medium">Room Code: {gameState.gameRoom.roomCode}</p>
+                {gameState.gameRoom.phase !== 'setup' && (
+                  <p className="text-sm text-amber-700">
+                    New joins are closed. Enter your recovery code to reclaim your seat.
+                  </p>
+                )}
+              </div>
             )}
           </CardHeader>
           <CardContent className="space-y-4">
+            {joinError && (
+              <div className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+                {joinError}
+              </div>
+            )}
+
             <div>
               <input
                 type="text"
                 value={playerName}
                 onChange={(e) => setPlayerName(e.target.value)}
-                placeholder="Enter your name"
+                placeholder="Enter your name (optional with recovery code)"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                onKeyPress={(e) => e.key === 'Enter' && joinGame()}
+                disabled={joining}
+              />
+            </div>
+
+            <div>
+              <input
+                type="text"
+                value={accessCode}
+                onChange={(e) => setAccessCode(e.target.value.toUpperCase())}
+                placeholder="Recovery code (optional)"
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                 onKeyPress={(e) => e.key === 'Enter' && joinGame()}
                 disabled={joining}
@@ -219,9 +291,9 @@ export default function MultiplayerGame() {
             <Button 
               onClick={joinGame} 
               className="w-full" 
-              disabled={!playerName.trim() || joining}
+              disabled={(!playerName.trim() && !accessCode.trim()) || joining}
             >
-              {joining ? 'Joining...' : 'Join Game'}
+              {joining ? 'Joining...' : accessCode.trim() ? 'Join or Rejoin Game' : 'Join Game'}
             </Button>
 
             {gameState.gameRoom && gameState.players.length > 0 && (
@@ -264,12 +336,12 @@ export default function MultiplayerGame() {
           <CardContent className="space-y-6">
             
             <div className="text-center">
-              <Button onClick={copyGameLink} variant="outline">
-                📋 Copy Game Link
-              </Button>
-              <p className="text-sm text-gray-500 mt-2">
-                Share this link with other players
-              </p>
+              <div className="mx-auto max-w-md">
+                <GameSharePanel
+                  roomCode={gameRoom.roomCode}
+                  shareUrl={MultiplayerApiService.generateShareableLink(gameRoom.roomCode)}
+                />
+              </div>
             </div>
 
             {gameRoom.gameMode === 'teams' ? (
@@ -358,6 +430,8 @@ export default function MultiplayerGame() {
                 Waiting for {players.find(p => p.isHost)?.name} to start the game...
               </div>
             )}
+
+            <RecoveryCodePanel accessCode={gameState.playerAccessCode} />
           </CardContent>
         </Card>
       </div>
@@ -531,6 +605,8 @@ export default function MultiplayerGame() {
               )}
             </CardContent>
           </Card>
+
+          <RecoveryCodePanel accessCode={gameState.playerAccessCode} />
         </div>
       </div>
     );
@@ -590,6 +666,8 @@ export default function MultiplayerGame() {
             <Button onClick={() => router.push('/')} className="w-full" size="lg">
               Play Again
             </Button>
+
+            <RecoveryCodePanel accessCode={gameState.playerAccessCode} />
           </CardContent>
         </Card>
       </div>

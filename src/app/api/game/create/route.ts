@@ -2,8 +2,15 @@ import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import { kv } from '@/lib/kv';
 import { GameRoom, PlayerSession, QuizSettings } from '@/types/multiplayer';
+import { createAccessCode, createUniqueRoomCode } from '@/lib/game-room';
 import { TriviaApiService } from '@/services/trivia-api';
 import { logoQuestions, soundQuestions } from '@/data/questions';
+
+function toPublicPlayerSession(playerSession: PlayerSession): PlayerSession {
+  const publicPlayerSession = { ...playerSession };
+  delete publicPlayerSession.accessCode;
+  return publicPlayerSession;
+}
 
 function normalizeSettings(settings: QuizSettings | undefined): QuizSettings | null {
   if (!settings) {
@@ -89,6 +96,8 @@ export async function POST(request: NextRequest) {
     // Generate IDs
     const gameId = uuidv4();
     const playerId = uuidv4();
+    const roomCode = await createUniqueRoomCode();
+    const accessCode = createAccessCode();
 
     // Fetch trivia questions
     const apiQuestions = await TriviaApiService.getQuestions({
@@ -131,6 +140,7 @@ export async function POST(request: NextRequest) {
     // Create game room
     const gameRoom: GameRoom = {
       id: gameId,
+      roomCode,
       hostId: playerId,
       name: `${playerName}'s Quiz`,
       settings: normalizedSettings,
@@ -151,6 +161,7 @@ export async function POST(request: NextRequest) {
       id: playerId,
       name: playerName.trim(),
       gameId,
+      accessCode,
       answers: {},
       score: 0,
       isHost: true,
@@ -160,16 +171,20 @@ export async function POST(request: NextRequest) {
     // Store in KV
     await Promise.all([
       kv.set(`game:${gameId}`, gameRoom),
+      kv.set(`room-code:${roomCode}`, gameId),
       kv.set(`player:${playerId}`, playerSession),
       kv.expire(`game:${gameId}`, 3600), // 1 hour expiry
+      kv.expire(`room-code:${roomCode}`, 3600),
       kv.expire(`player:${playerId}`, 3600)
     ]);
 
     return NextResponse.json({
       gameId,
+      roomCode,
       playerId,
       gameRoom,
-      playerSession
+      playerSession: toPublicPlayerSession(playerSession),
+      playerAccessCode: accessCode,
     });
 
   } catch (error) {

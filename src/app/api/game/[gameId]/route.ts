@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { kv } from "@/lib/kv";
-import { GameRoom, PlayerSession, Team } from "@/types/multiplayer";
+import { PlayerSession, Team } from "@/types/multiplayer";
+import { getGameRoomByIdentifier } from "@/lib/game-room";
+
+function toPublicPlayerSession(playerSession: PlayerSession): PlayerSession {
+  const publicPlayerSession = { ...playerSession };
+  delete publicPlayerSession.accessCode;
+  return publicPlayerSession;
+}
 
 export async function GET(
   request: NextRequest,
@@ -13,8 +20,8 @@ export async function GET(
     const { searchParams } = new URL(request.url);
     const playerId = searchParams.get("playerId");
 
-    const gameRoom = await kv.get<GameRoom>(`game:${gameId}`);
-    if (!gameRoom) {
+    const { gameId: resolvedGameId, gameRoom } = await getGameRoomByIdentifier(gameId);
+    if (!resolvedGameId || !gameRoom) {
       return NextResponse.json({ error: "Game not found" }, { status: 404 });
     }
 
@@ -27,6 +34,10 @@ export async function GET(
     );
 
     const validPlayers = players.filter(Boolean) as PlayerSession[];
+    const publicPlayers = validPlayers.map(toPublicPlayerSession);
+    const currentPlayer = playerId
+      ? validPlayers.find((player) => player.id === playerId) ?? null
+      : null;
 
     // Get teams if in team mode
     let teams: Team[] = [];
@@ -61,8 +72,9 @@ export async function GET(
 
     return NextResponse.json({
       gameRoom: responseGameRoom,
-      players: validPlayers,
+      players: publicPlayers,
       teams,
+      playerAccessCode: currentPlayer?.accessCode ?? null,
     });
   } catch (error) {
     console.error("Error fetching game:", error);

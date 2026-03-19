@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { kv } from '@/lib/kv';
-import { PlayerSession, GameRoom, Team } from '@/types/multiplayer';
+import { PlayerSession, Team } from '@/types/multiplayer';
+import { getGameRoomByIdentifier } from '@/lib/game-room';
 
 export async function POST(
   request: NextRequest,
@@ -32,10 +33,12 @@ export async function POST(
     // Get player session and game room
     const [playerSession, gameRoom] = await Promise.all([
       kv.get<PlayerSession>(`player:${playerId}`),
-      kv.get<GameRoom>(`game:${gameId}`)
+      getGameRoomByIdentifier(gameId).then((result) => result.gameRoom)
     ]);
 
-    if (!playerSession || playerSession.gameId !== gameId) {
+    const resolvedGameId = gameRoom?.id;
+
+    if (!playerSession || !resolvedGameId || playerSession.gameId !== resolvedGameId) {
       return NextResponse.json(
         { error: 'Player not found or not in this game' },
         { status: 404 }
@@ -98,7 +101,7 @@ export async function POST(
 
       const team = await kv.get<Team>(`team:${playerSession.teamId}`);
 
-      if (!team || team.gameId !== gameId) {
+      if (!team || team.gameId !== resolvedGameId) {
         return NextResponse.json(
           { error: 'Team not found for this game' },
           { status: 400 }

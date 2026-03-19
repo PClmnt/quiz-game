@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import { kv } from '@/lib/kv';
 import { GameRoom, PlayerSession, Team } from '@/types/multiplayer';
+import { getGameRoomByIdentifier } from '@/lib/game-room';
 
 const TEAM_COLORS = [
   '#FF6B6B', // Red
@@ -31,16 +32,17 @@ export async function POST(
       return NextResponse.json({ error: 'Player ID is required' }, { status: 400 });
     }
 
-    const [gameRoom, player] = await Promise.all([
-      kv.get<GameRoom>(`game:${gameId}`),
+    const [gameRoomResult, player] = await Promise.all([
+      getGameRoomByIdentifier(gameId),
       kv.get<PlayerSession>(`player:${playerId}`),
     ]);
+    const { gameId: resolvedGameId, gameRoom } = gameRoomResult;
 
-    if (!gameRoom) {
+    if (!resolvedGameId || !gameRoom) {
       return NextResponse.json({ error: 'Game not found' }, { status: 404 });
     }
 
-    if (!player || player.gameId !== gameId) {
+    if (!player || player.gameId !== resolvedGameId) {
       return NextResponse.json({ error: 'Player not found' }, { status: 404 });
     }
 
@@ -79,7 +81,7 @@ export async function POST(
     const team: Team = {
       id: teamId,
       name: teamName.trim(),
-      gameId,
+      gameId: resolvedGameId,
       playerIds: [playerId],
       captainId: playerId,
       score: 0,
@@ -101,7 +103,7 @@ export async function POST(
     // Store team and update game
     await Promise.all([
       kv.set(`team:${teamId}`, team),
-      kv.set(`game:${gameId}`, updatedGameRoom),
+      kv.set(`game:${resolvedGameId}`, updatedGameRoom),
       kv.set(`player:${playerId}`, updatedPlayer),
       kv.expire(`team:${teamId}`, 3600), // 1 hour expiry
     ]);
@@ -124,7 +126,7 @@ export async function GET(
     const { gameId } = await params;
 
     // Get game room
-    const gameRoom = await kv.get<GameRoom>(`game:${gameId}`);
+    const { gameRoom } = await getGameRoomByIdentifier(gameId);
     if (!gameRoom) {
       return NextResponse.json({ error: 'Game not found' }, { status: 404 });
     }

@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { TriviaApiService } from '@/services/trivia-api';
 import { MultiplayerApiService } from '@/services/multiplayer-api';
+import { savePlayerSession } from '@/lib/player-storage';
 import { TriviaCategory } from '@/types/trivia-api';
 import { QuizSettings } from '@/types/multiplayer';
 
@@ -35,6 +36,7 @@ export default function HomePage() {
   // Join game state
   const [gameId, setGameId] = useState('');
   const [joinPlayerName, setJoinPlayerName] = useState('');
+  const [joinAccessCode, setJoinAccessCode] = useState('');
 
   useEffect(() => {
     loadCategories();
@@ -84,8 +86,13 @@ export default function HomePage() {
 
     try {
       const response = await MultiplayerApiService.createGame(playerName, settings, gameMode);
-      localStorage.setItem(`player_${response.gameId}`, response.playerId);
-      router.push(`/game/${response.gameId}`);
+      savePlayerSession(
+        response.playerId,
+        response.playerAccessCode,
+        response.gameId,
+        response.roomCode
+      );
+      router.push(`/game/${response.roomCode}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create game');
     } finally {
@@ -94,8 +101,8 @@ export default function HomePage() {
   };
 
   const joinGame = async () => {
-    if (!gameId.trim() || !joinPlayerName.trim()) {
-      setError('Please enter both game ID and your name');
+    if (!gameId.trim() || (!joinPlayerName.trim() && !joinAccessCode.trim())) {
+      setError('Enter a room code and either your name or your recovery code');
       return;
     }
 
@@ -103,9 +110,19 @@ export default function HomePage() {
     setError(null);
 
     try {
-      const response = await MultiplayerApiService.joinGame(gameId, joinPlayerName);
-      localStorage.setItem(`player_${gameId}`, response.playerId);
-      router.push(`/game/${gameId}`);
+      const response = await MultiplayerApiService.joinGame(
+        gameId,
+        joinPlayerName,
+        joinAccessCode.trim() || undefined
+      );
+      savePlayerSession(
+        response.playerId,
+        response.playerAccessCode,
+        gameId,
+        response.gameRoom.id,
+        response.roomCode
+      );
+      router.push(`/game/${response.roomCode}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to join game');
     } finally {
@@ -471,12 +488,12 @@ export default function HomePage() {
             )}
 
             <div>
-              <label className="block text-sm font-medium mb-2">Game ID</label>
+              <label className="block text-sm font-medium mb-2">Game ID or Room Code</label>
               <input
                 type="text"
                 value={gameId}
                 onChange={(e) => setGameId(e.target.value)}
-                placeholder="Enter game ID"
+                placeholder="Enter game ID or room code"
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
@@ -492,17 +509,28 @@ export default function HomePage() {
               />
             </div>
 
+            <div>
+              <label className="block text-sm font-medium mb-2">Recovery Code (Optional)</label>
+              <input
+                type="text"
+                value={joinAccessCode}
+                onChange={(e) => setJoinAccessCode(e.target.value.toUpperCase())}
+                placeholder="Use this to reclaim your seat on a new device"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
             <Button 
               onClick={joinGame} 
               className="w-full" 
               size="lg"
-              disabled={!gameId.trim() || !joinPlayerName.trim() || loading}
+              disabled={!gameId.trim() || (!joinPlayerName.trim() && !joinAccessCode.trim()) || loading}
             >
-              {loading ? 'Joining Game...' : 'Join Game'}
+              {loading ? 'Joining Game...' : joinAccessCode.trim() ? 'Join or Rejoin Game' : 'Join Game'}
             </Button>
 
             <div className="text-center text-sm text-gray-500">
-              <p>Get the game ID from the host to join their quiz</p>
+              <p>Get the room code or link from the host to join their quiz</p>
             </div>
           </CardContent>
         </Card>

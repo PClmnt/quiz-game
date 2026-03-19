@@ -16,6 +16,7 @@ export interface PlayerSession {
   name: string;
   gameId: string;
   teamId?: string;
+  accessCode?: string;
   answers: Record<string, number>;
   score: number;
   isHost: boolean;
@@ -24,6 +25,7 @@ export interface PlayerSession {
 
 export interface GameRoom {
   id: string;
+  roomCode: string;
   hostId: string;
   name: string;
   settings: QuizSettings;

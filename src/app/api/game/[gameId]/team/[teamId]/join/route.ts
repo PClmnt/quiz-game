@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { kv } from '@/lib/kv';
 import { GameRoom, Team, PlayerSession } from '@/types/multiplayer';
+import { getGameRoomByIdentifier } from '@/lib/game-room';
 
 export async function POST(
   request: NextRequest,
@@ -16,13 +17,14 @@ export async function POST(
     }
 
     // Get game room, team, and player
-    const [gameRoom, team, player] = await Promise.all([
-      kv.get<GameRoom>(`game:${gameId}`),
+    const [gameRoomResult, team, player] = await Promise.all([
+      getGameRoomByIdentifier(gameId),
       kv.get<Team>(`team:${teamId}`),
       kv.get<PlayerSession>(`player:${playerId}`)
     ]);
+    const { gameId: resolvedGameId, gameRoom } = gameRoomResult;
 
-    if (!gameRoom) {
+    if (!resolvedGameId || !gameRoom) {
       return NextResponse.json({ error: 'Game not found' }, { status: 404 });
     }
 
@@ -42,11 +44,11 @@ export async function POST(
       return NextResponse.json({ error: 'Teams can only be changed during setup' }, { status: 400 });
     }
 
-    if (player.gameId !== gameId) {
+    if (player.gameId !== resolvedGameId) {
       return NextResponse.json({ error: 'Player is not in this game' }, { status: 400 });
     }
 
-    if (team.gameId !== gameId || !gameRoom.teams.includes(teamId)) {
+    if (team.gameId !== resolvedGameId || !gameRoom.teams.includes(teamId)) {
       return NextResponse.json({ error: 'Team does not belong to this game' }, { status: 400 });
     }
 
@@ -85,7 +87,7 @@ export async function POST(
     await Promise.all([
       kv.set(`team:${teamId}`, updatedTeam),
       kv.set(`player:${playerId}`, updatedPlayer),
-      kv.set(`game:${gameId}`, updatedGameRoom),
+      kv.set(`game:${resolvedGameId}`, updatedGameRoom),
     ]);
 
     return NextResponse.json({ team: updatedTeam, player: updatedPlayer });
