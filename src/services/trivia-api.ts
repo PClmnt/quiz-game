@@ -1,13 +1,21 @@
 import { TriviaApiResponse, TriviaCategoriesResponse, QuizSettings, TriviaApiQuestion, TriviaCategory } from '@/types/trivia-api';
 import { Question } from '@/types/quiz';
+import { generalKnowledgeQuestions } from '@/data/questions';
 
 const BASE_URL = 'https://opentdb.com';
 const MAX_QUESTIONS_PER_REQUEST = 50;
 const MAX_EXCLUSION_FETCH_ATTEMPTS = 6;
+const QUESTIONS_CACHE_TTL_MS = 5 * 60 * 1000;
+
+interface CachedQuestions {
+  expiresAt: number;
+  questions: TriviaApiQuestion[];
+}
 
 export class TriviaApiService {
   private static sessionToken: string | null = null;
   private static categoriesCache: TriviaCategory[] | null = null;
+  private static questionsCache = new Map<string, CachedQuestions>();
 
   static async getSessionToken(): Promise<string> {
     if (this.sessionToken) {
@@ -41,61 +49,80 @@ export class TriviaApiService {
   }
 
   static async getQuestions(settings: QuizSettings): Promise<TriviaApiQuestion[]> {
+    const cacheKey = this.getCacheKey(settings);
+    const cachedQuestions = this.questionsCache.get(cacheKey);
+
+    if (cachedQuestions && cachedQuestions.expiresAt > Date.now()) {
+      return this.cloneQuestions(cachedQuestions.questions);
+    }
+
     const excludedCategories = settings.excludedCategories ?? [];
     const shouldFilterCategories = !settings.category && excludedCategories.length > 0;
 
-    if (!shouldFilterCategories) {
-      return this.fetchQuestionsBatch(settings);
-    }
+    try {
+      if (!shouldFilterCategories) {
+        const questions = await this.fetchQuestionsBatch(settings);
+        this.setQuestionsCache(cacheKey, questions);
+        return this.cloneQuestions(questions);
+      }
 
-    const excludedCategoryNames = await this.getExcludedCategoryNames(excludedCategories);
-    if (excludedCategoryNames.size === 0) {
-      return this.fetchQuestionsBatch(settings);
-    }
+      const excludedCategoryNames = await this.getExcludedCategoryNames(excludedCategories);
+      if (excludedCategoryNames.size === 0) {
+        const questions = await this.fetchQuestionsBatch(settings);
+        this.setQuestionsCache(cacheKey, questions);
+        return this.cloneQuestions(questions);
+      }
 
-    const collectedQuestions: TriviaApiQuestion[] = [];
-    const seenQuestions = new Set<string>();
-    let attempts = 0;
+      const collectedQuestions: TriviaApiQuestion[] = [];
+      const seenQuestions = new Set<string>();
+      let attempts = 0;
 
-    while (
-      collectedQuestions.length < settings.amount &&
-      attempts < MAX_EXCLUSION_FETCH_ATTEMPTS
-    ) {
-      attempts += 1;
+      while (
+        collectedQuestions.length < settings.amount &&
+        attempts < MAX_EXCLUSION_FETCH_ATTEMPTS
+      ) {
+        attempts += 1;
 
-      const remainingQuestions = settings.amount - collectedQuestions.length;
-      const batchSize = Math.min(
-        MAX_QUESTIONS_PER_REQUEST,
-        Math.max(remainingQuestions * 2, remainingQuestions)
-      );
+        const remainingQuestions = settings.amount - collectedQuestions.length;
+        const batchSize = Math.min(
+          MAX_QUESTIONS_PER_REQUEST,
+          Math.max(remainingQuestions * 2, remainingQuestions)
+        );
 
-      const batchQuestions = await this.fetchQuestionsBatch({
-        ...settings,
-        amount: batchSize,
-      });
+        const batchQuestions = await this.fetchQuestionsBatch({
+          ...settings,
+          amount: batchSize,
+        });
 
-      for (const question of batchQuestions) {
-        const categoryName = decodeURIComponent(question.category);
-        const questionKey = `${question.question}:${question.correct_answer}`;
+        for (const question of batchQuestions) {
+          const categoryName = decodeURIComponent(question.category);
+          const questionKey = `${question.question}:${question.correct_answer}`;
 
-        if (excludedCategoryNames.has(categoryName) || seenQuestions.has(questionKey)) {
-          continue;
-        }
+          if (excludedCategoryNames.has(categoryName) || seenQuestions.has(questionKey)) {
+            continue;
+          }
 
-        collectedQuestions.push(question);
-        seenQuestions.add(questionKey);
+          collectedQuestions.push(question);
+          seenQuestions.add(questionKey);
 
-        if (collectedQuestions.length === settings.amount) {
-          break;
+          if (collectedQuestions.length === settings.amount) {
+            break;
+          }
         }
       }
-    }
 
-    if (collectedQuestions.length < settings.amount) {
-      throw new Error('Not enough questions available after applying your category filters');
-    }
+      if (collectedQuestions.length < settings.amount) {
+        throw new Error('Not enough questions available after applying your category filters');
+      }
 
-    return collectedQuestions;
+      this.setQuestionsCache(cacheKey, collectedQuestions);
+      return this.cloneQuestions(collectedQuestions);
+    } catch (error) {
+      console.warn('Falling back to bundled trivia questions:', error);
+      const fallbackQuestions = this.buildFallbackQuestions(settings);
+      this.setQuestionsCache(cacheKey, fallbackQuestions);
+      return this.cloneQuestions(fallbackQuestions);
+    }
   }
 
   private static async fetchQuestionsBatch(settings: QuizSettings): Promise<TriviaApiQuestion[]> {
@@ -168,6 +195,51 @@ export class TriviaApiService {
         type: 'general',
         difficulty: apiQ.difficulty,
         category: decodeURIComponent(apiQ.category)
+      };
+    });
+  }
+
+  private static getCacheKey(settings: QuizSettings): string {
+    const excludedCategories = [...(settings.excludedCategories ?? [])].sort((a, b) => a - b);
+
+    return JSON.stringify({
+      amount: settings.amount,
+      category: settings.category ?? null,
+      difficulty: settings.difficulty ?? null,
+      type: settings.type ?? null,
+      excludedCategories,
+    });
+  }
+
+  private static setQuestionsCache(cacheKey: string, questions: TriviaApiQuestion[]): void {
+    this.questionsCache.set(cacheKey, {
+      expiresAt: Date.now() + QUESTIONS_CACHE_TTL_MS,
+      questions: this.cloneQuestions(questions),
+    });
+  }
+
+  private static cloneQuestions(questions: TriviaApiQuestion[]): TriviaApiQuestion[] {
+    return questions.map((question) => ({
+      ...question,
+      incorrect_answers: [...question.incorrect_answers],
+    }));
+  }
+
+  private static buildFallbackQuestions(settings: QuizSettings): TriviaApiQuestion[] {
+    const localQuestions = generalKnowledgeQuestions.questions;
+
+    return Array.from({ length: settings.amount }, (_, index) => {
+      const localQuestion = localQuestions[index % localQuestions.length];
+      const correctAnswer = localQuestion.options[localQuestion.correctAnswer];
+      const incorrectAnswers = localQuestion.options.filter((_, optionIndex) => optionIndex !== localQuestion.correctAnswer);
+
+      return {
+        type: 'multiple',
+        difficulty: settings.difficulty ?? 'medium',
+        category: encodeURIComponent(localQuestion.category ?? generalKnowledgeQuestions.name),
+        question: encodeURIComponent(localQuestion.question),
+        correct_answer: encodeURIComponent(correctAnswer),
+        incorrect_answers: incorrectAnswers.map((answer) => encodeURIComponent(answer)),
       };
     });
   }
