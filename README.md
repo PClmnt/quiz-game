@@ -1,36 +1,56 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Family Quiz Game
 
-## Getting Started
+A multiplayer trivia web app built with **Next.js** (App Router), **React 19**, and **Tailwind CSS**. Hosts create a room; players join on their phones or laptops using a short room code or share link. Questions are loaded from the public [Open Trivia Database](https://opentdb.com/) API, with optional logo and sound rounds layered on top of the main quiz.
 
-First, run the development server:
+## What it does
+
+- **Host flow**: choose your name, pick **individual** or **teams** mode, and configure the round (question count, difficulty, optional single category, category exclusions, per-question time limit, optional logo/sound extras, team sizes when in teams mode). Creating a game stores session state server-side and sends you to `/game/[roomCode]`.
+- **Join flow**: enter the **game ID or room code** plus your name, or use a **recovery code** to reclaim the same seat on another device after `localStorage` was cleared or you switched browsers.
+- **Realtime-ish play**: game state (players, teams, scores, current question) lives in **Upstash Redis** via REST (`KV_REST_API_URL` and `KV_REST_API_TOKEN`). API routes under `src/app/api/game/` read and update that state. **Local development** falls back to an in-memory mock when those variables are absent, so you can run the UI without a Redis account (multiplayer will not persist across restarts or scale beyond one process).
+
+The UI uses **Radix UI** primitives and **lucide-react** icons; share UI can generate QR codes (`qrcode`) for joining.
+
+## Prerequisites
+
+- Node.js 20+ (matches typical Next.js 16 requirements)
+- npm (or another package manager — adjust commands accordingly)
+
+For production or multi-instance hosting, configure Upstash (or compatible Redis with the same env contract used in `src/lib/kv.ts`).
+
+## Environment variables
+
+| Variable | Required | Purpose |
+| -------- | -------- | ------- |
+| `KV_REST_API_URL` | Production | Upstash Redis REST URL |
+| `KV_REST_API_TOKEN` | Production | Upstash Redis REST token |
+| `ALLOW_MOCK_KV` | Optional | Set to `true` in production only if you intentionally accept mock KV (not recommended for real multiplayer) |
+
+Set variables in Vercel **Settings → Environment Variables**, or create a local `.env.local` (ignored by git via `.gitignore`).
+
+## Scripts
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run dev    # Next dev with Turbopack
+npm run build  # Production build
+npm run start  # Start production server
+npm run lint   # ESLint
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) after `npm run dev`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Deploy
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+The repo includes `vercel.json` with a longer `maxDuration` for API routes. Deploy on [Vercel](https://vercel.com) (or any Node host): set the KV variables above so rooms and scores persist correctly.
 
-## Learn More
+## Project layout (high level)
 
-To learn more about Next.js, take a look at the following resources:
+- `src/app/page.tsx` — landing: create or join
+- `src/app/game/[gameId]/page.tsx` — lobby, team setup, and in-game experience
+- `src/app/api/game/**` — create, join, answer, advance question, teams
+- `src/services/trivia-api.ts` — Open Trivia DB client
+- `src/lib/game-room.ts` / `src/lib/kv.ts` — room codes and storage
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## License
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Private package (`"private": true` in `package.json`). Add a license file if you open-source the project.
