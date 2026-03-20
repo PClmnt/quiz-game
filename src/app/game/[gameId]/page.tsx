@@ -451,7 +451,6 @@ export default function MultiplayerGame() {
     }
 
     const hasAnswered = currentPlayer.answers[currentQuestion.id] !== undefined;
-    const selectedAnswer = currentPlayer.answers[currentQuestion.id];
     
     // In team mode, check if team already answered
     let teamAnswered = false;
@@ -464,6 +463,13 @@ export default function MultiplayerGame() {
         teamAnswered = !!answeredByTeammate;
       }
     }
+
+    const effectiveAnsweringPlayer = answeredByTeammate ?? (hasAnswered ? currentPlayer : null);
+    const effectiveSelectedAnswer = effectiveAnsweringPlayer?.answers[currentQuestion.id];
+    const canRevealCorrectAnswer =
+      currentPlayer.isHost &&
+      (hasAnswered || teamAnswered) &&
+      currentQuestion.correctAnswer !== undefined;
 
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
@@ -507,10 +513,10 @@ export default function MultiplayerGame() {
                 </div>
               )}
               
-              {currentPlayer.isHost && hasAnswered && currentQuestion.correctAnswer !== undefined && (
+              {canRevealCorrectAnswer && (
                 <div className="mb-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
                   <p className="text-sm text-blue-700 font-medium">
-                    🎯 Host View: The correct answer is highlighted in green
+                    🎯 Host View: Correct answers are green and incorrect submitted answers are red
                   </p>
                 </div>
               )}
@@ -533,13 +539,25 @@ export default function MultiplayerGame() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {currentQuestion.options.map((option, index) => {
-                  const isCorrectAnswer = currentPlayer.isHost && hasAnswered && currentQuestion.correctAnswer === index;
+                  const isSelectedAnswer = effectiveSelectedAnswer === index;
+                  const isCorrectAnswer = canRevealCorrectAnswer && currentQuestion.correctAnswer === index;
+                  const isWrongSelectedAnswer =
+                    canRevealCorrectAnswer &&
+                    isSelectedAnswer &&
+                    currentQuestion.correctAnswer !== index;
+
                   return (
                     <Button
                       key={index}
-                      variant={selectedAnswer === index ? "default" : "outline"}
+                      variant={isSelectedAnswer ? "default" : "outline"}
                       className={`p-6 text-lg h-auto text-left justify-start ${
-                        isCorrectAnswer ? 'ring-2 ring-green-500 ring-offset-2' : ''
+                        isCorrectAnswer
+                          ? 'border-green-500 bg-green-50 text-green-900 ring-2 ring-green-500 ring-offset-2 hover:bg-green-100'
+                          : ''
+                      } ${
+                        isWrongSelectedAnswer
+                          ? 'border-red-500 bg-red-50 text-red-900 ring-2 ring-red-500 ring-offset-2 hover:bg-red-100'
+                          : ''
                       }`}
                       onClick={() => submitAnswer(index)}
                       disabled={hasAnswered || teamAnswered}
@@ -548,6 +566,9 @@ export default function MultiplayerGame() {
                       <span className="flex-1">{option}</span>
                       {isCorrectAnswer && (
                         <Badge className="ml-2 bg-green-500">Correct</Badge>
+                      )}
+                      {isWrongSelectedAnswer && (
+                        <Badge className="ml-2 bg-red-500">Submitted</Badge>
                       )}
                     </Button>
                   );
